@@ -1,0 +1,192 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserRole {
+  ADMIN
+  USER
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String
+  phone     String?
+  avatar    String?
+  role      UserRole @default(USER)
+  
+  orders    Order[]
+  cartItems CartItem[]
+  addresses Address[]
+  wishlist  WishlistItem[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Address {
+  id        String  @id @default(uuid())
+  label     String  @default("Home") // Home, Work, Other
+  name      String
+  phone     String
+  address   String
+  city      String
+  state     String
+  zip       String
+  country   String  @default("USA")
+  isDefault Boolean @default(false)
+  
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model WishlistItem {
+  id        String   @id @default(uuid())
+  
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+  
+  @@unique([userId, productId])
+}
+
+model Category {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  slug        String    @unique
+  description String?
+  image       String?
+  
+  products    Product[]
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String?
+  price       Decimal  @db.Decimal(10, 2)
+  salePrice   Decimal? @db.Decimal(10, 2)
+  stock       Int      @default(0)
+  images      String[]
+  featured    Boolean  @default(false)
+  active      Boolean  @default(true)
+  
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id])
+  
+  orderItems  OrderItem[]
+  cartItems   CartItem[]
+  wishlistItems WishlistItem[]
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model CartItem {
+  id        String  @id @default(uuid())
+  quantity  Int     @default(1)
+  
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+  
+  @@unique([userId, productId])
+}
+
+model Order {
+  id            String      @id @default(uuid())
+  orderNumber   String      @unique
+  status        OrderStatus @default(PENDING)
+  totalAmount   Decimal     @db.Decimal(10, 2)
+  discount      Decimal     @default(0) @db.Decimal(10, 2)
+  couponCode    String?
+  
+  // Payment fields
+  paymentMethod String?     // PAYPAL, COD, etc.
+  paymentStatus String?     @default("PENDING") // PENDING, PAID, FAILED
+  paymentId     String?     // PayPal payment/capture ID
+  paypalOrderId String?     // PayPal order ID
+  paidAt        DateTime?
+  
+  shippingName    String
+  shippingAddress String
+  shippingCity    String
+  shippingState   String
+  shippingZip     String
+  shippingPhone   String
+  
+  userId      String
+  customer    User        @relation(fields: [userId], references: [id])
+  
+  items       OrderItem[]
+  
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+model OrderItem {
+  id        String  @id @default(uuid())
+  quantity  Int
+  price     Decimal @db.Decimal(10, 2)
+  
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+}
+
+model Coupon {
+  id            String   @id @default(uuid())
+  code          String   @unique
+  description   String?
+  discountType  String   @default("percentage") // percentage or fixed
+  discountValue Decimal  @db.Decimal(10, 2)
+  minOrderValue Decimal? @db.Decimal(10, 2)
+  maxUses       Int?
+  usedCount     Int      @default(0)
+  active        Boolean  @default(true)
+  expiresAt     DateTime?
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Setting {
+  id    String @id @default(uuid())
+  key   String @unique
+  value String
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
