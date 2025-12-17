@@ -1,27 +1,24 @@
-# Use official Node.js image (Debian slim is more compatible with Prisma than Alpine)
-FROM node:20-slim
+# Use standard Node.js image which includes all necessary build tools and libraries (like OpenSSL)
+FROM node:20
 
-# Install OpenSSL (required for Prisma)
-RUN apt-get update -y && apt-get install -y openssl
-
-# Set working directory
+# Create app directory
 WORKDIR /app
 
-# Copy package files first to leverage cache
+# Copy application dependency manifests to the container image.
 COPY package*.json ./
 COPY prisma ./prisma/
 
-# Install dependencies used in production
+# Install dependencies
 RUN npm install
 
 # Generate Prisma Client
 RUN npx prisma generate
 
-# Copy the rest of the application
+# Copy local code to the container image.
 COPY . .
 
-# Expose the port
+# Expose the service port
 EXPOSE 5001
 
-# Start the application
+# Run the web service on container startup.
 CMD ["npm", "start"]
