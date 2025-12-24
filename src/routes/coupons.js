@@ -31,6 +31,15 @@ router.post('/validate', auth, async (req, res) => {
             return res.status(400).json({ message: `Minimum order value is $${Number(coupon.minOrderValue).toFixed(2)}` });
         }
 
+        if (coupon.firstOrderOnly) {
+            const previousOrders = await prisma.order.count({
+                where: { userId: req.user.id }
+            });
+            if (previousOrders > 0) {
+                return res.status(400).json({ message: 'This coupon is valid for your first order only' });
+            }
+        }
+
         let discount = 0;
         if (coupon.discountType === 'percentage') {
             discount = (subtotal * Number(coupon.discountValue)) / 100;
@@ -49,6 +58,35 @@ router.post('/validate', auth, async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Failed to validate coupon' });
+    }
+});
+
+// Get available coupons for the user (public-ish)
+router.get('/available', auth, async (req, res) => {
+    try {
+        const orderCount = await prisma.order.count({
+            where: { userId: req.user.id }
+        });
+
+        const coupons = await prisma.coupon.findMany({
+            where: {
+                active: true,
+                OR: [
+                    { expiresAt: null },
+                    { expiresAt: { gt: new Date() } }
+                ],
+                // If user has orders, don't show firstOrderOnly: true
+                // If user has NO orders, show both
+                ...(orderCount > 0 ? { firstOrderOnly: false } : {})
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 5 // Optional: limit suggestions
+        });
+
+        res.json(coupons);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Failed to fetch available coupons' });
     }
 });
 
@@ -79,6 +117,7 @@ router.post('/', auth, adminOnly, async (req, res) => {
                 minOrderValue: minOrderValue ? parseFloat(minOrderValue) : null,
                 maxUses: maxUses ? parseInt(maxUses) : null,
                 expiresAt: expiresAt ? new Date(expiresAt) : null,
+                firstOrderOnly: req.body.firstOrderOnly === true || req.body.firstOrderOnly === 'true'
             },
         });
 
@@ -106,6 +145,9 @@ router.patch('/:id', auth, adminOnly, async (req, res) => {
         if (maxUses !== undefined) data.maxUses = maxUses ? parseInt(maxUses) : null;
         if (expiresAt !== undefined) data.expiresAt = expiresAt ? new Date(expiresAt) : null;
         if (active !== undefined) data.active = active;
+        if (req.body.firstOrderOnly !== undefined) {
+            data.firstOrderOnly = req.body.firstOrderOnly === true || req.body.firstOrderOnly === 'true';
+        }
 
         const coupon = await prisma.coupon.update({
             where: { id: req.params.id },

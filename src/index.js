@@ -27,6 +27,10 @@ const orderRoutes = require('./routes/orders');
 const couponRoutes = require('./routes/coupons');
 const settingsRoutes = require('./routes/settings');
 const paymentRoutes = require('./routes/payments');
+const { verifyEmailConfig } = require('./services/emailService');
+
+// Verify email configuration on startup
+verifyEmailConfig();
 
 const app = express();
 

@@ -17,6 +17,7 @@ enum OrderStatus {
   PENDING
   CONFIRMED
   SHIPPED
+  OUT_OF_DELIVERY
   DELIVERED
   CANCELLED
 }
@@ -126,17 +127,24 @@ model CartItem {
 model Order {
   id            String      @id @default(uuid())
   orderNumber   String      @unique
+  invoiceNumber String?     @unique // Unique invoice number for the order
+  trackingToken String?     @unique // Public token for tracking without login
   status        OrderStatus @default(PENDING)
   totalAmount   Decimal     @db.Decimal(10, 2)
   discount      Decimal     @default(0) @db.Decimal(10, 2)
   couponCode    String?
   
   // Payment fields
-  paymentMethod String?     // PAYPAL, COD, etc.
-  paymentStatus String?     @default("PENDING") // PENDING, PAID, FAILED
-  paymentId     String?     // PayPal payment/capture ID
+  paymentMethod String?     // PAYPAL, COD, ONLINE, etc.
+  paymentType   String?     // Credit Card, Debit Card, UPI, Net Banking, Wallet, etc.
+  paymentStatus String?     @default("PENDING") // PENDING, PAID, FAILED, COD_PENDING
+  paymentId     String?     // PayPal payment/capture ID or other gateway transaction ID
   paypalOrderId String?     // PayPal order ID
+  failureReason String?     // Reason for payment failure (PG error message)
   paidAt        DateTime?
+  
+  // Estimated delivery
+  estimatedDeliveryDays Int?    @default(5)
   
   shippingName    String
   shippingAddress String
@@ -149,6 +157,7 @@ model Order {
   customer    User        @relation(fields: [userId], references: [id])
   
   items       OrderItem[]
+  tracking    OrderTracking[]
   
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
@@ -166,6 +175,19 @@ model OrderItem {
   product   Product @relation(fields: [productId], references: [id])
 }
 
+// Order tracking updates - admin can add status updates
+model OrderTracking {
+  id          String   @id @default(uuid())
+  status      String   // Processing, Packed, Handed to Courier, In Transit, Out for Delivery, etc.
+  description String?  // Optional description
+  location    String?  // Optional location info
+  
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime @default(now())
+}
+
 model Coupon {
   id            String   @id @default(uuid())
   code          String   @unique
@@ -176,6 +198,7 @@ model Coupon {
   maxUses       Int?
   usedCount     Int      @default(0)
   active        Boolean  @default(true)
+  firstOrderOnly Boolean @default(false)
   expiresAt     DateTime?
   
   createdAt     DateTime @default(now())

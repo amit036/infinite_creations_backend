@@ -36,12 +36,35 @@ router.get('/me', auth, async (req, res) => {
                 name: true,
                 role: true,
                 avatar: true,
-                phone: true
+                phone: true,
+                createdAt: true,
+                _count: {
+                    select: {
+                        wishlist: true,
+                        addresses: true
+                    }
+                }
             }
         });
 
         if (!user) return res.status(404).json({ message: 'User not found' });
-        res.json(user);
+
+        // Get orders count separately (excluding CANCELLED and FAILED payment status)
+        const ordersCount = await prisma.order.count({
+            where: {
+                userId: req.user.userId,
+                status: { not: 'CANCELLED' },
+                paymentStatus: { not: 'FAILED' }
+            }
+        });
+
+        res.json({
+            ...user,
+            _count: {
+                ...user._count,
+                orders: ordersCount
+            }
+        });
     } catch (error) {
         console.error('Get Profile Error:', error);
         res.status(500).json({ message: 'Failed to fetch profile' });

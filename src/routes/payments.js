@@ -137,9 +137,18 @@ router.post('/razorpay/create-order', auth, async (req, res) => {
 // Verify Razorpay payment
 router.post('/razorpay/verify', auth, async (req, res) => {
     try {
-        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, orderId } = req.body;
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, orderId, paymentType } = req.body;
 
         if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+            // Mark as failed if verification params are missing
+            await prisma.order.update({
+                where: { id: orderId },
+                data: {
+                    status: 'CANCELLED',
+                    paymentStatus: 'FAILED',
+                    failureReason: 'Missing payment verification parameters'
+                }
+            });
             return res.status(400).json({ message: 'Missing payment verification parameters' });
         }
 
@@ -151,16 +160,26 @@ router.post('/razorpay/verify', auth, async (req, res) => {
             .digest('hex');
 
         if (razorpay_signature !== expectedSign) {
+            // Mark as failed if signature invalid
+            await prisma.order.update({
+                where: { id: orderId },
+                data: {
+                    status: 'CANCELLED',
+                    paymentStatus: 'FAILED',
+                    failureReason: 'Invalid payment signature'
+                }
+            });
             return res.status(400).json({ message: 'Invalid payment signature' });
         }
 
-        // Update order status
+        // Update order payment status (order stays PENDING until admin confirms)
         const order = await prisma.order.update({
             where: { id: orderId },
             data: {
-                status: 'CONFIRMED',
+                status: 'PENDING', // Order stays pending until admin confirms
                 paymentStatus: 'PAID',
                 paymentMethod: 'RAZORPAY',
+                paymentType: paymentType || 'Online Payment', // Credit Card, Debit Card, UPI, Net Banking, Wallet
                 paymentId: razorpay_payment_id,
                 paidAt: new Date()
             }
@@ -173,6 +192,19 @@ router.post('/razorpay/verify', auth, async (req, res) => {
         });
     } catch (error) {
         console.error('Razorpay verify error:', error);
+
+        // Mark order as failed
+        if (req.body.orderId) {
+            await prisma.order.update({
+                where: { id: req.body.orderId },
+                data: {
+                    status: 'CANCELLED',
+                    paymentStatus: 'FAILED',
+                    failureReason: error.message || 'Payment verification failed'
+                }
+            }).catch(e => console.error('Failed to update order status:', e));
+        }
+
         res.status(500).json({
             message: 'Payment verification failed',
             error: error.message
@@ -216,7 +248,7 @@ router.post('/phonepe/create-order', auth, async (req, res) => {
         const accessToken = await getPhonePeAccessToken();
 
         const merchantOrderId = `IC_${order.orderNumber}_${Date.now()}`;
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
 
         // v2 API payload format
         const payload = {
@@ -290,7 +322,7 @@ router.post('/phonepe/create-order', auth, async (req, res) => {
 // Verify PhonePe payment status (v2 API)
 router.post('/phonepe/verify', auth, async (req, res) => {
     try {
-        const { orderId, merchantOrderId } = req.body;
+        const { orderId, merchantOrderId, paymentType } = req.body;
 
         if (!orderId || !merchantOrderId) {
             return res.status(400).json({ message: 'Order ID and merchant order ID are required' });
@@ -313,13 +345,17 @@ router.post('/phonepe/verify', auth, async (req, res) => {
         console.log('PhonePe status response:', JSON.stringify(response.data, null, 2));
 
         if (response.data && response.data.state === 'COMPLETED') {
-            // Update order status
+            // Determine payment type from response
+            const detectedPaymentType = response.data.paymentDetails?.paymentMode || paymentType || 'UPI';
+
+            // Update order payment status (order stays PENDING until admin confirms)
             const order = await prisma.order.update({
                 where: { id: orderId },
                 data: {
-                    status: 'CONFIRMED',
+                    status: 'PENDING', // Order stays pending until admin confirms
                     paymentStatus: 'PAID',
                     paymentMethod: 'PHONEPE',
+                    paymentType: detectedPaymentType,
                     paymentId: response.data.orderId || merchantOrderId,
                     paidAt: new Date()
                 }
@@ -331,6 +367,17 @@ router.post('/phonepe/verify', auth, async (req, res) => {
                 order
             });
         } else if (response.data && response.data.state === 'FAILED') {
+            // Mark order as failed
+            await prisma.order.update({
+                where: { id: orderId },
+                data: {
+                    status: 'CANCELLED',
+                    paymentStatus: 'FAILED',
+                    paymentMethod: 'PHONEPE',
+                    failureReason: response.data.errorCode || 'Payment failed'
+                }
+            });
+
             res.status(400).json({
                 success: false,
                 message: 'Payment failed',
@@ -346,6 +393,20 @@ router.post('/phonepe/verify', auth, async (req, res) => {
         }
     } catch (error) {
         console.error('PhonePe verify error:', error.response?.data || error);
+
+        // Mark order as failed
+        if (req.body.orderId) {
+            await prisma.order.update({
+                where: { id: req.body.orderId },
+                data: {
+                    status: 'CANCELLED',
+                    paymentStatus: 'FAILED',
+                    paymentMethod: 'PHONEPE',
+                    failureReason: error.response?.data?.message || error.message || 'Payment verification failed'
+                }
+            }).catch(e => console.error('Failed to update order status:', e));
+        }
+
         res.status(500).json({
             message: 'Payment verification failed',
             error: error.response?.data?.message || error.message
@@ -442,8 +503,8 @@ router.post('/paypal/create-order', auth, async (req, res) => {
                 brand_name: 'Infinite Creations',
                 landing_page: 'BILLING',
                 user_action: 'PAY_NOW',
-                return_url: `${process.env.FRONTEND_URL || 'http://localhost:3001'}/payment/success`,
-                cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3001'}/payment/cancel`
+                return_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/payment/success`,
+                cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/payment/cancel`
             }
         });
 
@@ -483,12 +544,22 @@ router.post('/paypal/capture-order', auth, async (req, res) => {
         const response = await paypalClient.execute(request);
 
         if (response.result.status === 'COMPLETED') {
+            // Determine payment type from PayPal response
+            const paymentSource = response.result.payment_source;
+            let paymentType = 'PayPal';
+            if (paymentSource?.card) {
+                paymentType = paymentSource.card.brand ? `${paymentSource.card.brand} Card` : 'Card';
+            } else if (paymentSource?.paypal) {
+                paymentType = 'PayPal Wallet';
+            }
+
             const order = await prisma.order.update({
                 where: { id: orderId },
                 data: {
-                    status: 'CONFIRMED',
+                    status: 'PENDING', // Order stays pending until admin confirms
                     paymentStatus: 'PAID',
                     paymentMethod: 'PAYPAL',
+                    paymentType: paymentType,
                     paymentId: response.result.id,
                     paidAt: new Date()
                 }
@@ -501,6 +572,17 @@ router.post('/paypal/capture-order', auth, async (req, res) => {
                 captureId: response.result.purchase_units?.[0]?.payments?.captures?.[0]?.id
             });
         } else {
+            // Mark as failed
+            await prisma.order.update({
+                where: { id: orderId },
+                data: {
+                    status: 'CANCELLED',
+                    paymentStatus: 'FAILED',
+                    paymentMethod: 'PAYPAL',
+                    failureReason: `Payment status: ${response.result.status}`
+                }
+            });
+
             res.status(400).json({
                 success: false,
                 message: 'Payment not completed',
@@ -509,6 +591,20 @@ router.post('/paypal/capture-order', auth, async (req, res) => {
         }
     } catch (error) {
         console.error('PayPal capture error:', error);
+
+        // Mark order as failed
+        if (req.body.orderId) {
+            await prisma.order.update({
+                where: { id: req.body.orderId },
+                data: {
+                    status: 'CANCELLED',
+                    paymentStatus: 'FAILED',
+                    paymentMethod: 'PAYPAL',
+                    failureReason: error.message || 'Payment capture failed'
+                }
+            }).catch(e => console.error('Failed to update order status:', e));
+        }
+
         res.status(500).json({
             message: 'Failed to capture payment',
             error: error.message
